@@ -1,18 +1,20 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class Keymaster {
   static const MethodChannel _channel = MethodChannel('keymaster');
 
   static Future<bool?> delete(String key, {bool? authRequired}) async {
-    bool? result = await _channel.invokeMethod(
+    String? result = await _channel.invokeMethod(
       'delete',
       {
         'key': key,
-        'auth': authRequired ?? false,
+        'auth': authRequired,
       },
     );
 
-    return result;
+    if (kDebugMode) print('Keychain Delete Result: $result');
+    return result == 'true';
   }
 
   static Future<String?> fetch(String key, {bool? authRequired}) async {
@@ -20,11 +22,14 @@ class Keymaster {
       'fetch',
       {
         'key': key,
-        'auth': authRequired ?? false,
+        'auth': authRequired,
       },
     );
 
-    return result;
+    if (kDebugMode) print('Keychain Fetch Result: $result');
+
+    bool isFailure = result?.startsWith('secCopyErr:') ?? true;
+    return isFailure ? null : result;
   }
 
   static Future<bool?> set(
@@ -32,16 +37,17 @@ class Keymaster {
     String value, {
     bool? authRequired,
   }) async {
-    bool? result = await _channel.invokeMethod(
+    String? result = await _channel.invokeMethod(
       'set',
       {
         'key': key,
         'value': value,
-        'auth': authRequired ?? false,
+        'auth': authRequired,
       },
     );
 
-    return result;
+    if (kDebugMode) print('Keychain Set Result: $result');
+    return result == 'true';
   }
 
   static Future<bool?> update(
@@ -49,15 +55,16 @@ class Keymaster {
     String value, {
     bool? authRequired,
   }) async {
-    bool? result = await _channel.invokeMethod(
+    String? result = await _channel.invokeMethod(
       'update',
       {
         'key': key,
         'value': value,
-        'auth': authRequired ?? false,
+        'auth': authRequired,
       },
     );
 
-    return result;
+    if (kDebugMode) print('Keychain Update Result: $result');
+    return result == 'true';
   }
 }

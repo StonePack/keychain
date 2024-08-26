@@ -12,40 +12,32 @@ public class KeymasterPlugin: NSObject, FlutterPlugin {
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     let arguments = call.arguments as! Dictionary<String, Any>
+    
+    let auth = arguments["auth"] as? Bool ?? false
+    let data = arguments["value"] as? String
+    let key = arguments["key"] as? String
+      
+    if (key == nil) {
+        return result(nil)
+    }
       
     switch call.method {
     case "delete":
-        guard let key = arguments["key"] as? String, let auth = arguments["auth"] as? Bool else {
-            result(nil)
-            return
-        }
-        
-        let success = Keychain.deleteKeychainValue(key: key, authRequired: auth)
-        result(success)
+        result(Keychain.deleteKeychainValue(key: key!, authRequired: auth))
     case "fetch":
-        guard let key = arguments["key"] as? String, let auth = arguments["auth"] as? Bool else {
-            result(nil)
-            return
-        }
-        
-        let res = Keychain.fetchKeychainValue(key: key, authRequired: auth)
-        result(res)
+        result(Keychain.fetchKeychainValue(key: key!, authRequired: auth))
     case "set":
-        guard let key = arguments["key"] as? String, let data = arguments["value"] as? String, let auth = arguments["auth"] as? Bool else {
-            result(nil)
-            return
+        if (data == nil) {
+            return result(nil)
         }
-        
-        let success = Keychain.setKeychainValue(key: key, value: data, requireAuth: auth)
-        result(success)
+
+        result(Keychain.setKeychainValue(key: key!, value: data!, requireAuth: auth))
     case "update":
-        guard let key = arguments["key"] as? String, let data = arguments["value"] as? String, let auth = arguments["auth"] as? Bool else {
-            result(nil)
-            return
+        if (data == nil) {
+            return result(nil)
         }
         
-        let success = Keychain.updateKeychainValue(key: key, value: data, authRequired: auth)
-        result(success)
+        result(Keychain.updateKeychainValue(key: key!, value: data!, authRequired: auth))
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -53,7 +45,14 @@ public class KeymasterPlugin: NSObject, FlutterPlugin {
 }
 
 class Keychain {
-    public static func deleteKeychainValue(key: String, authRequired: Bool) -> Bool {
+    static let access = SecAccessControlCreateWithFlags(
+      nil,  // Use the default allocator.
+      kSecAttrAccessibleWhenUnlocked,
+      .userPresence,
+      nil
+    );
+    
+    public static func deleteKeychainValue(key: String, authRequired: Bool) -> String {
         let bundleID: String = Bundle.main.bundleIdentifier ?? "keymaster"
         let account = "\(bundleID).\(key)"
         
@@ -64,20 +63,18 @@ class Keychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
             kSecUseAuthenticationContext as String: context,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUI
         ]
         
         if (!authRequired) {
             query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
         }
         
-        if SecItemDelete(query as CFDictionary) == noErr {
-            return true
-        }
-        
-        return false
+        let result = SecItemDelete(query as CFDictionary)
+        return result == noErr ? "true" : SecCopyErrorMessageString(result, nil).debugDescription
     }
     
-    public static func fetchKeychainValue(key: String, authRequired: Bool) -> String? {
+    public static func fetchKeychainValue(key: String, authRequired: Bool) -> String {
         let bundleID: String = Bundle.main.bundleIdentifier ?? "keymaster"
         let account = "\(bundleID).\(key)"
         
@@ -91,6 +88,7 @@ class Keychain {
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
             kSecUseAuthenticationContext as String: context,
+            kSecUseAuthenticationUI as String: kSecUseAuthenticationUI
         ]
         
         if (!authRequired) {
@@ -98,42 +96,51 @@ class Keychain {
         }
         
         var item: CFTypeRef?
+        let result = SecItemCopyMatching(query as CFDictionary, &item)
         
-        if SecItemCopyMatching(query as CFDictionary, &item) == noErr {
+        if (result == noErr) {
             if let keychainItem = item as? [String: Any], let rawValue = keychainItem[kSecValueData as String] as? Data, let value = String(data: rawValue, encoding: .utf8) {
                 return value
             }
             
-            return nil
+            return "secCopyErr: item data invalid"
         }
         
-        return nil
+        let err = SecCopyErrorMessageString(result, nil)
+        return "secCopyErr: \(err.debugDescription)"
     }
     
-    public static func setKeychainValue(key: String, value: String, requireAuth: Bool) -> Bool {
+    public static func setKeychainValue(key: String, value: String, requireAuth: Bool) -> String {
         let bundleID: String = Bundle.main.bundleIdentifier ?? "keymaster"
         let account = "\(bundleID).\(key)"
+        
+        let context = LAContext()
+        context.localizedReason = "Authenticate to read from keychain"
         
         let data = value.data(using: .utf8)!
         
         var attributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: account,
-            kSecAttrAccessControl as String: access,
             kSecValueData as String: data,
+            kSecUseAuthenticationContext as String: context,
         ]
         
         if (requireAuth) {
-            attributes[kSecAttrAccessControl as String] = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlocked, .userPresence, nil)!
+            attributes[kSecAttrAccessControl as String] = access
         }
         
-        let res = SecItemAdd(attributes as CFDictionary, nil)
+        let result = SecItemAdd(attributes as CFDictionary, nil)
+        if (result == errSecDuplicateItem) {
+            return updateKeychainValue(key: key, value: value, authRequired: requireAuth)
+        }
         
-        if res == noErr { return true }
-        return false
+        
+        return result == noErr ? "true" : SecCopyErrorMessageString(result, nil).debugDescription
+
     }
     
-    public static func updateKeychainValue(key: String, value: String, authRequired: Bool) -> Bool {
+    public static func updateKeychainValue(key: String, value: String, authRequired: Bool) -> String {
         let bundleID: String = Bundle.main.bundleIdentifier ?? "keymaster"
         let account = "\(bundleID).\(key)"
         
@@ -153,10 +160,8 @@ class Keychain {
         }
         
         let attributes: [String: Any] = [kSecValueData as String: data]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == noErr {
-            return true
-        }
         
-        return false
+        let result = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        return result == noErr ? "true" : SecCopyErrorMessageString(result, nil).debugDescription
     }
 }
